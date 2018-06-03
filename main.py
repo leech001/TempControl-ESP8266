@@ -1,7 +1,6 @@
 import gc
 import onewire, ds18x20
 import config
-import device
 import uasyncio as asyncio
 import wifi
 import machine
@@ -9,6 +8,7 @@ import utime as time
 import usocket as socket
 import ustruct as struct
 from umqtt.simple import MQTTClient
+
 
 gc.enable()
 wifi.activate()
@@ -20,7 +20,12 @@ dat = machine.Pin(config.temp_pin)
 ds = ds18x20.DS18X20(onewire.OneWire(dat))
 roms = ds.scan()
 
+while len(roms) < 1:
+    print("Temp sensor not found")
+    time.sleep(10)
+    roms = ds.scan()
 print("Found DS18B20 devices:", roms)
+
 use_topic = config.CONFIG['DEVICE_TYPE'] + "/" + config.CONFIG['DEVICE_PLACE'] + "/" + config.CONFIG[
     'DEVICE_PLACE_NAME'] + "/"
 device_topic = config.CONFIG['DEVICE_TYPE'] + "/" + config.CONFIG['DEVICE_PLACE'] + "/" + config.CONFIG[
@@ -85,8 +90,8 @@ async def check_sensor():
         await asyncio.sleep(0.75)
         for item in roms:
             device_id = ""
-            for id in item:
-                device_id += str(id)
+            for b_id in item:
+                device_id += str(b_id)
             client.publish(device_topic + "data/temp/%s" % device_id, "%s" % ds.read_temp(item))
             if device_id == config.CONFIG['TEMP_SENSOR_ID']:
                 temp_control(ds.read_temp(item))
@@ -99,11 +104,14 @@ def temp_control(sensor_temp):
         for relay in config.relays:
             if relay.auto is True:
                 relay.on()
-    if sensor_temp >= (config.CONFIG['TEMP'] + config.CONFIG['TEMP_HYSTERESIS']):
+    elif sensor_temp >= (config.CONFIG['TEMP'] + config.CONFIG['TEMP_HYSTERESIS']):
         print("Heat OFF")
         for relay in config.relays:
             if relay.auto is True:
-                loop.create_task(relay.off())
+                if relay.run is True:
+                    loop.create_task(relay.off())
+    else:
+        print("Temp OK")
 
 
 def on_message(topic, msg):
@@ -128,7 +136,8 @@ def on_message(topic, msg):
             config.relays[id_relays].on()
             config.relays[id_relays].auto = False
         if msg == b"off":
-            loop.create_task(config.relays[id_relays].off())
+            if config.relays[id_relays].run is True:
+                loop.create_task(config.relays[id_relays].off())
             config.relays[id_relays].auto = False
         if msg == b"auto_on":
             config.relays[id_relays].auto = True
